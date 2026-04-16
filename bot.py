@@ -102,7 +102,7 @@ def process_remove_user(message):
             continue
     bot.send_message(ADMIN_ID, f"✅ ተጠቃሚ <code>{target_id}</code> ከ {count} ቻናሎች ተወግዷል።", reply_markup=admin_panel_keyboard())
     
-# --- START BOT ---
-if name == "main":
+ # --- START BOT ---
+if __name__ == "__main__":
     print("Sinte VIP Bot is starting...")
     bot.infinity_polling()
