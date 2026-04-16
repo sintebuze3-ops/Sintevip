@@ -1,4 +1,3 @@
-geta:
 import os
 import telebot
 import logging
