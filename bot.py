@@ -1,9 +1,21 @@
 import os
 import telebot
-import logging
+import threading
+from flask import Flask
 from telebot import types
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
+
+# --- RENDER PORT SETUP ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Sinte VIP Bot is Alive!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -18,9 +30,8 @@ try:
     db = client["sinte_vip_db"]
     channels_col = db["channels"]
     users_col = db["users"]
-    print("Connected to MongoDB for Sinte VIP!")
-except Exception as e:
-    print(f"Database Error: {e}")
+except Exception:
+    pass
 
 # --- ADMIN KEYBOARD ---
 def admin_panel_keyboard():
@@ -28,81 +39,50 @@ def admin_panel_keyboard():
     markup.add(
         InlineKeyboardButton("➕ ቻናል ለመጨመር", callback_data="adm_add_ch"),
         InlineKeyboardButton("➖ ቻናል ለመቀነስ", callback_data="adm_rem_ch"),
-        InlineKeyboardButton("👤 ተጠቃሚ ለማስወገድ (በ ID/Forward)", callback_data="adm_manual_remove")
+        InlineKeyboardButton("👤 ተጠቃሚ ለማስወገድ", callback_data="adm_manual_remove")
     )
     return markup
 
-# --- COMMANDS ---
+# --- COMMANDS & HANDLERS ---
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     if message.chat.id == ADMIN_ID:
-        bot.send_message(ADMIN_ID, "<b>🛠 የ Sinte VIP አድሚን ፓነል</b>\n\nእንኳን ደህና መጡ! ከታች ያሉትን አማራጮች በመጠቀም ያስተዳድሩ፦", reply_markup=admin_panel_keyboard())
-    else:
-        bot.send_message(message.chat.id, "ይህ ቦት ለ Sinte VIP አድሚን ብቻ የሚያገለግል ነው።")
+        bot.send_message(ADMIN_ID, "<b>🛠 የ Sinte VIP አድሚን ፓነል</b>", reply_markup=admin_panel_keyboard())
 
-# --- CALLBACK HANDLERS ---
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     if call.from_user.id != ADMIN_ID: return
-
     if call.data == "adm_add_ch":
-        msg = bot.send_message(ADMIN_ID, "እባክዎ መጨመር ከሚፈልጉት ቻናል አንድ መልዕክት <b>Forward</b> ያድርጉልኝ፦")
+        msg = bot.send_message(ADMIN_ID, "እባክዎ ከቻናሉ መልዕክት <b>Forward</b> ያድርጉልኝ፦")
         bot.register_next_step_handler(msg, process_add_channel)
-
     elif call.data == "adm_rem_ch":
         markup = InlineKeyboardMarkup()
-        all_ch = list(channels_col.find())
-        if not all_ch:
-            bot.send_message(ADMIN_ID, "ምንም የተመዘገበ ቻናል የለም።")
-            return
-        for ch in all_ch:
+        for ch in list(channels_col.find()):
             markup.add(InlineKeyboardButton(f"❌ {ch.get('name', 'Channel')}", callback_data=f"del_ch_{ch['id']}"))
-        bot.edit_message_text("መሰረዝ የሚፈልጉትን ቻናል ይምረጡ፦", ADMIN_ID, call.message.message_id, reply_markup=markup)
-
+        bot.send_message(ADMIN_ID, "መሰረዝ የሚፈልጉትን ይምረጡ፦", reply_markup=markup)
     elif call.data.startswith("del_ch_"):
         ch_id = int(call.data.split("_")[2])
         channels_col.delete_one({"id": ch_id})
-        bot.answer_callback_query(call.id, "ቻናሉ ተሰርዟል!")
-        bot.send_message(ADMIN_ID, "✅ ቻናሉ ከ Sinte VIP ዝርዝር ውስጥ ተሰርዟል!።", reply_markup=admin_panel_keyboard())
-
+        bot.send_message(ADMIN_ID, "✅ ቻናሉ ተሰርዟል።")
     elif call.data == "adm_manual_remove":
-        msg = bot.send_message(ADMIN_ID, "ለማስወገድ የፈለጉትን ሰው <b>ID</b> ይላኩ ወይም መልዕክት <b>Forward</b> ያድርጉ፦")
+        msg = bot.send_message(ADMIN_ID, "ID ይላኩ ወይም <b>Forward</b> ያድርጉ፦")
         bot.register_next_step_handler(msg, process_remove_user)
 
-# --- PROCESSORS ---
 def process_add_channel(message):
-    if not message.forward_from_chat:
-        bot.send_message(ADMIN_ID, "❌ ስህተት! እባክዎ መልዕክቱን ከቻናሉ ፎርዋርድ ያድርጉት።")
-        return
-    ch_id = message.forward_from_chat.id
-    ch_name = message.forward_from_chat.title
-    channels_col.update_one({"id": ch_id}, {"$set": {"name": ch_name, "id": ch_id}}, upsert=True)
-    bot.send_message(ADMIN_ID, f"✅ ቻናል <b>{ch_name}</b> በስኬት ተጨምሯል!", reply_markup=admin_panel_keyboard())
+    if message.forward_from_chat:
+        ch_id, ch_name = message.forward_from_chat.id, message.forward_from_chat.title
+        channels_col.update_one({"id": ch_id}, {"$set": {"name": ch_name, "id": ch_id}}, upsert=True)
+        bot.send_message(ADMIN_ID, f"✅ {ch_name} ተጨምሯል!")
 
 def process_remove_user(message):
-    target_id = None
-    if message.forward_from:
-        target_id = message.forward_from.id
-    elif message.text and message.text.isdigit():
-        target_id = int(message.text)
-    
-    if not target_id:
-        bot.send_message(ADMIN_ID, "❌ ስህተት! ID ይላኩ ወይም መልዕክት ፎርዋርድ ያድርጉ።")
-        return
+    target_id = message.forward_from.id if message.forward_from else (int(message.text) if message.text.isdigit() else None)
+    if target_id:
+        users_col.update_one({"user_id": target_id}, {"$set": {"active": False}})
+        bot.send_message(ADMIN_ID, f"✅ ተጠቃሚ {target_id} ታግዷል።")
 
-    users_col.update_one({"user_id": target_id}, {"$set": {"active": False, "expiry": 0}})
-    channels = list(channels_col.find())
-    count = 0
-    for ch in channels:
-        try:
-            bot.ban_chat_member(ch["id"], target_id)
-            bot.unban_chat_member(ch["id"], target_id)
-            count += 1
-        except:
-            continue
-    bot.send_message(ADMIN_ID, f"✅ ተጠቃሚ <code>{target_id}</code> ከ {count} ቻናሎች ተወግዷል።", reply_markup=admin_panel_keyboard())
-    
- # --- START BOT ---
+# --- START BOT & WEB SERVER ---
 if __name__ == "__main__":
+    # Flaskን በሌላ Thread ማስነሳት ለ Render Port Binding
+    threading.Thread(target=run_web).start()
     print("Sinte VIP Bot is starting...")
     bot.infinity_polling()
