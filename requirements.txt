@@ -1,5 +1,3 @@
 pyTelegramBotAPI
 pymongo
-apscheduler
-flask
-gunicorn
+Flask
